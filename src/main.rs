@@ -103,6 +103,7 @@ struct AppState {
     last_key: Option<KeyCode>,
     last_key_time: Option<std::time::Instant>,
     edit_mode: Option<EditState>,
+    status_message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +121,7 @@ impl AppState {
             last_key: None,
             last_key_time: None,
             edit_mode: None,
+            status_message: None,
         }
     }
     fn update_selection(&mut self) {
@@ -211,8 +213,35 @@ fn draw_ui(
         let edit = Paragraph::new("Press [e] to edit a host, [k] to secure keyfile, [q] to quit")
             .block(Block::default().borders(Borders::ALL).title("Controls"));
         f.render_widget(edit, chunks[1]);
+
+        if let Some(msg) = &app.status_message {
+            let popup = Paragraph::new(msg.clone())
+                .block(Block::default().borders(Borders::ALL).title("Status"));
+            f.render_widget(popup, centered_rect(60, 20, f.size()));
+        }
     }
 }
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
@@ -319,42 +348,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if !app.hosts.is_empty() {
                                 let host = &app.hosts[app.selected];
                                 if let Some(identity_file) = &host.identity_file {
-                                    disable_raw_mode().ok();
-                                    execute!(
-                                        terminal.backend_mut(),
-                                        LeaveAlternateScreen,
-                                        DisableMouseCapture
-                                    ).ok();
-                                    terminal.show_cursor().ok();
-                                    println!("Modifying permissions for keyfile: {}", identity_file);
-
                                     let username = std::env::var("USERNAME").unwrap_or_else(|_| "User".to_string());
-                                    let status1 = std::process::Command::new("icacls")
-                                        .arg(identity_file)
-                                        .arg("/inheritance:r")
-                                        .status();
-                                    let status2 = std::process::Command::new("icacls")
-                                        .arg(identity_file)
-                                        .arg("/grant:r")
-                                        .arg(format!("{}:R", username))
-                                        .status();
+                                    let grant_arg = format!("{}:R", username);
 
-                                    match (status1, status2) {
-                                        (Ok(s1), Ok(s2)) if s1.success() && s2.success() => {
-                                            println!("Successfully updated permissions for {}", identity_file);
-                                        }
-                                        _ => {
-                                            println!("Failed to update permissions for {}", identity_file);
+                                    let cmds = [
+                                        vec!["/reset"],
+                                        vec!["/inheritance:r"],
+                                        vec!["/remove", "NT AUTHORITY\\Authenticated Users"],
+                                        vec!["/remove", "BUILTIN\\Users"],
+                                        vec!["/remove", "Everyone"],
+                                        vec!["/grant:r", &grant_arg],
+                                    ];
+
+                                    let mut full_output = String::new();
+                                    let mut failed = None;
+
+                                    for args in cmds {
+                                        let output = std::process::Command::new("icacls")
+                                            .arg(identity_file)
+                                            .args(&args)
+                                            .output();
+
+                                        match output {
+                                            Ok(out) => {
+                                                let stdout = String::from_utf8_lossy(&out.stdout);
+                                                let stderr = String::from_utf8_lossy(&out.stderr);
+                                                full_output.push_str(&format!("> icacls {:?}\n", args));
+                                                if !stdout.is_empty() {
+                                                    full_output.push_str(&format!("stdout:\n{}\n", stdout));
+                                                }
+                                                if !stderr.is_empty() {
+                                                    full_output.push_str(&format!("stderr:\n{}\n", stderr));
+                                                }
+                                                if !out.status.success() {
+                                                    failed = Some(format!(
+                                                        "❌ icacls {:?} failed with code {}\n{}",
+                                                        args,
+                                                        out.status.code().unwrap_or(-1),
+                                                        full_output
+                                                    ));
+                                                    break;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                failed = Some(format!("❌ Failed to run icacls {:?}: {}\n{}", args, e, full_output));
+                                                break;
+                                            }
                                         }
                                     }
-                                    println!("Press Enter to return to the app...");
-                                    let _ = std::io::stdin().read_line(&mut String::new());
-                                    enable_raw_mode().ok();
-                                    execute!(
-                                        terminal.backend_mut(),
-                                        EnterAlternateScreen,
-                                        EnableMouseCapture
-                                    ).ok();
+
+                                    app.status_message = Some(match failed {
+                                        Some(msg) => msg,
+                                        None => format!("✔ Permissions fixed for {}\n{}", identity_file, full_output),
+                                    });
                                 }
                             }
                         }
