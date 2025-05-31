@@ -24,8 +24,7 @@ struct HostEntry {
     user: Option<String>,
     port: Option<String>,
     identity_file: Option<String>,
-    proxy_jump: Option<String>,
-    forward_agent: Option<String>,
+    password: Option<String>,
 }
 
 impl HostEntry {
@@ -46,8 +45,7 @@ impl HostEntry {
                     user: None,
                     port: None,
                     identity_file: None,
-                    proxy_jump: None,
-                    forward_agent: None,
+                    password: None,
                 });
             } else if let Some(entry) = current.as_mut() {
                 if let Some(rest) = trimmed.strip_prefix("HostName") {
@@ -58,10 +56,10 @@ impl HostEntry {
                     entry.port = Some(rest.trim().to_string());
                 } else if let Some(rest) = trimmed.strip_prefix("IdentityFile") {
                     entry.identity_file = Some(rest.trim().to_string());
-                } else if let Some(rest) = trimmed.strip_prefix("ProxyJump") {
-                    entry.proxy_jump = Some(rest.trim().to_string());
-                } else if let Some(rest) = trimmed.strip_prefix("ForwardAgent") {
-                    entry.forward_agent = Some(rest.trim().to_string());
+                } else if let Some(rest) = trimmed.strip_prefix("Password") {
+                    entry.password = Some(rest.trim().to_string());
+                } else if let Some(rest) = trimmed.strip_prefix("# Password") {
+                    entry.password = Some(rest.trim().to_string());
                 }
             }
         }
@@ -90,11 +88,8 @@ impl HostEntry {
             if let Some(val) = &host.identity_file {
                 out.push_str(&format!("    IdentityFile {}\n", val));
             }
-            if let Some(val) = &host.proxy_jump {
-                out.push_str(&format!("    ProxyJump {}\n", val));
-            }
-            if let Some(val) = &host.forward_agent {
-                out.push_str(&format!("    ForwardAgent {}\n", val));
+            if let Some(val) = &host.password {
+                out.push_str(&format!("    # Password {}\n", val));
             }
             out.push('\n');
         }
@@ -166,8 +161,7 @@ fn draw_ui(
             ("User", edit.host.user.clone().unwrap_or_default()),
             ("Port", edit.host.port.clone().unwrap_or_default()),
             ("IdentityFile", edit.host.identity_file.clone().unwrap_or_default()),
-            ("ProxyJump", edit.host.proxy_jump.clone().unwrap_or_default()),
-            ("ForwardAgent", edit.host.forward_agent.clone().unwrap_or_default()),
+            ("Password", edit.host.password.clone().unwrap_or_default()),
         ];
         let items: Vec<ListItem> = fields.iter().enumerate().map(|(i, (label, value))| {
             let mut line = format!("{}: {}", label, value);
@@ -214,7 +208,7 @@ fn draw_ui(
 
         f.render_widget(list, chunks[0]);
 
-        let edit = Paragraph::new("Press [e] to edit a host, [q] to quit")
+        let edit = Paragraph::new("Press [e] to edit a host, [k] to secure keyfile, [q] to quit")
             .block(Block::default().borders(Borders::ALL).title("Controls"));
         f.render_widget(edit, chunks[1]);
     }
@@ -231,6 +225,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = ssh_config_path();
     let config_path_str = config_path.display().to_string();
     let mut app = AppState::new(hosts);
+
+    // Initial draw before flushing events
+    terminal.draw(|f| draw_ui(f, &app, &config_path_str))?;
+
+    // Flush any leftover events (e.g. Enter from cargo run)
+    while event::poll(Duration::from_millis(0))? {
+        let _ = event::read();
+    }
 
     loop {
         terminal.draw(|f| draw_ui(f, &app, &config_path_str))?;
@@ -257,11 +259,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.edit_mode = None;
                         }
                         KeyCode::Tab | KeyCode::Down => {
-                            edit.field_index = (edit.field_index + 1) % 7;
+                            edit.field_index = (edit.field_index + 1) % 6;
                         }
                         KeyCode::Up => {
                             if edit.field_index == 0 {
-                                edit.field_index = 6;
+                                edit.field_index = 5;
                             } else {
                                 edit.field_index -= 1;
                             }
@@ -282,6 +284,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } else {
                     match key.code {
+                        KeyCode::Enter => {
+                            if !app.hosts.is_empty() {
+                                let host_name = &app.hosts[app.selected].name;
+                                disable_raw_mode().ok();
+                                execute!(
+                                    terminal.backend_mut(),
+                                    LeaveAlternateScreen,
+                                    DisableMouseCapture
+                                ).ok();
+                                terminal.show_cursor().ok();
+                                println!("Connecting to {}...", host_name);
+
+                                std::process::Command::new("ssh")
+                                    .arg(host_name)
+                                    .status()
+                                    .expect("Failed to launch ssh");
+
+                                return Ok(()); // Quit the app after SSH exits
+                            }
+                        }
                         KeyCode::Char('q') => break,
                         KeyCode::Char('e') => {
                             if !app.hosts.is_empty() {
@@ -291,6 +313,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     field_index: 0,
                                     field_values: vec![], // unused for now
                                 });
+                            }
+                        }
+                        KeyCode::Char('k') => {
+                            if !app.hosts.is_empty() {
+                                let host = &app.hosts[app.selected];
+                                if let Some(identity_file) = &host.identity_file {
+                                    disable_raw_mode().ok();
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        LeaveAlternateScreen,
+                                        DisableMouseCapture
+                                    ).ok();
+                                    terminal.show_cursor().ok();
+                                    println!("Modifying permissions for keyfile: {}", identity_file);
+
+                                    let username = std::env::var("USERNAME").unwrap_or_else(|_| "User".to_string());
+                                    let status1 = std::process::Command::new("icacls")
+                                        .arg(identity_file)
+                                        .arg("/inheritance:r")
+                                        .status();
+                                    let status2 = std::process::Command::new("icacls")
+                                        .arg(identity_file)
+                                        .arg("/grant:r")
+                                        .arg(format!("{}:R", username))
+                                        .status();
+
+                                    match (status1, status2) {
+                                        (Ok(s1), Ok(s2)) if s1.success() && s2.success() => {
+                                            println!("Successfully updated permissions for {}", identity_file);
+                                        }
+                                        _ => {
+                                            println!("Failed to update permissions for {}", identity_file);
+                                        }
+                                    }
+                                    println!("Press Enter to return to the app...");
+                                    let _ = std::io::stdin().read_line(&mut String::new());
+                                    enable_raw_mode().ok();
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        EnterAlternateScreen,
+                                        EnableMouseCapture
+                                    ).ok();
+                                }
                             }
                         }
                         KeyCode::Down => {
@@ -346,12 +411,8 @@ fn get_edit_field_mut<'a>(host: &'a mut HostEntry, idx: usize) -> Option<&'a mut
             host.identity_file.as_mut()
         },
         5 => {
-            if host.proxy_jump.is_none() { host.proxy_jump = Some(String::new()); }
-            host.proxy_jump.as_mut()
-        },
-        6 => {
-            if host.forward_agent.is_none() { host.forward_agent = Some(String::new()); }
-            host.forward_agent.as_mut()
+            if host.password.is_none() { host.password = Some(String::new()); }
+            host.password.as_mut()
         },
         _ => None,
     }
