@@ -74,6 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let hosts = load_config_file().unwrap_or_default();
     let mut selected = 0;
+    let config_path = ssh_config_path();
+    let config_path_str = config_path.display().to_string();
 
     loop {
         terminal.draw(|f| {
@@ -98,13 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             label.push_str(&format!(" ({})", ip));
                         }
                         ListItem::new(Text::from(Line::from(Span::raw(label))))
-                        // ListItem::new(Spans::from(Span::raw(label)))
                     })
                     .collect()
             };
 
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("SSH Hosts"))
+                .block(Block::default().borders(Borders::ALL).title(format!("SSH Hosts ({})", config_path_str)))
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("→ ");
 
