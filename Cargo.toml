@@ -1,0 +1,14 @@
+[package]
+name = "putty"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal SSH session manager for Windows CLI"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ryankopf/putty"
+authors = ["Ryan Kopf <ryan@ryankopf.com>"]
+keywords = ["ssh", "cli", "windows"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+crossterm = "0.29.0"
+ratatui = "0.29.0"
