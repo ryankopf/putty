@@ -1,6 +1,8 @@
 use std::fs;
 use std::io::{self, stdout};
 use std::path::PathBuf;
+use std::time::Duration;
+use std::thread::sleep;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute, terminal,
@@ -11,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, ListState},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Terminal,
 };
 
@@ -59,24 +61,21 @@ impl HostEntry {
 struct AppState {
     hosts: Vec<HostEntry>,
     selected: usize,
-    list_state: ListState,
+    last_key: Option<KeyCode>,
+    last_key_time: Option<std::time::Instant>,
 }
 
 impl AppState {
     fn new(hosts: Vec<HostEntry>) -> Self {
-        let mut list_state = ListState::default();
-        let selected = 0;
-        if !hosts.is_empty() {
-            list_state.select(Some(selected));
+        Self {
+            hosts,
+            selected: 0,
+            last_key: None,
+            last_key_time: None,
         }
-        Self { hosts, selected, list_state }
     }
     fn update_selection(&mut self) {
-        if self.hosts.is_empty() {
-            self.list_state.select(None);
-        } else {
-            self.list_state.select(Some(self.selected));
-        }
+        // No-op, kept for compatibility if needed
     }
 }
 
@@ -94,7 +93,7 @@ fn ssh_config_path() -> PathBuf {
 
 fn draw_ui(
     f: &mut ratatui::Frame,
-    app: &mut AppState,
+    app: &AppState,
     config_path_str: &str,
 ) {
     let area = f.area();
@@ -112,22 +111,26 @@ fn draw_ui(
     } else {
         app.hosts
             .iter()
-            .map(|h| {
+            .enumerate()
+            .map(|(i, h)| {
                 let mut label = h.name.clone();
                 if let Some(ip) = &h.hostname {
                     label.push_str(&format!(" ({})", ip));
                 }
-                ListItem::new(Text::from(Line::from(Span::raw(label))))
+                let mut item = ListItem::new(Text::from(Line::from(Span::raw(label))));
+                if i == app.selected {
+                    item = item.style(Style::default().add_modifier(Modifier::REVERSED));
+                }
+                item
             })
             .collect()
     };
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(format!("SSH Hosts ({})", config_path_str)))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("→ ");
 
-    f.render_stateful_widget(list, chunks[0], &mut app.list_state);
+    f.render_widget(list, chunks[0]);
 
     let edit = Paragraph::new("Press [e] to edit a host, [q] to quit")
         .block(Block::default().borders(Borders::ALL).title("Controls"));
@@ -147,33 +150,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = AppState::new(hosts);
 
     loop {
-        terminal.draw(|f| draw_ui(f, &mut app, &config_path_str))?;
+        terminal.draw(|f| draw_ui(f, &app, &config_path_str))?;
 
         if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char('q') => break,
-                KeyCode::Char('e') => {
-                    if let Some(idx) = app.list_state.selected() {
-                        println!("Edit host: {}", app.hosts[idx].name);
-                    }
-                }
-                KeyCode::Down => {
-                    if !app.hosts.is_empty() {
-                        app.selected = (app.selected + 1) % app.hosts.len();
-                        app.update_selection();
-                    }
-                }
-                KeyCode::Up => {
-                    if !app.hosts.is_empty() {
-                        if app.selected == 0 {
-                            app.selected = app.hosts.len() - 1;
-                        } else {
-                            app.selected -= 1;
+            let now = std::time::Instant::now();
+            let allow = match (app.last_key, app.last_key_time) {
+                (Some(prev), Some(t)) if prev == key.code && now.duration_since(t) < Duration::from_millis(200) => false,
+                _ => true,
+            };
+            if allow {
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('e') => {
+                        if !app.hosts.is_empty() {
+                            println!("Edit host: {}", app.hosts[app.selected].name);
                         }
-                        app.update_selection();
                     }
+                    KeyCode::Down => {
+                        if !app.hosts.is_empty() {
+                            app.selected = (app.selected + 1) % app.hosts.len();
+                        }
+                    }
+                    KeyCode::Up => {
+                        if !app.hosts.is_empty() {
+                            if app.selected == 0 {
+                                app.selected = app.hosts.len() - 1;
+                            } else {
+                                app.selected -= 1;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+                app.last_key = Some(key.code);
+                app.last_key_time = Some(now);
             }
         }
     }
