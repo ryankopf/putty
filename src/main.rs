@@ -72,6 +72,34 @@ impl HostEntry {
 
         hosts
     }
+
+    fn write_ssh_config(hosts: &[HostEntry]) -> io::Result<()> {
+        let path = ssh_config_path();
+        let mut out = String::new();
+        for host in hosts {
+            out.push_str(&format!("Host {}\n", host.name));
+            if let Some(val) = &host.hostname {
+                out.push_str(&format!("    HostName {}\n", val));
+            }
+            if let Some(val) = &host.user {
+                out.push_str(&format!("    User {}\n", val));
+            }
+            if let Some(val) = &host.port {
+                out.push_str(&format!("    Port {}\n", val));
+            }
+            if let Some(val) = &host.identity_file {
+                out.push_str(&format!("    IdentityFile {}\n", val));
+            }
+            if let Some(val) = &host.proxy_jump {
+                out.push_str(&format!("    ProxyJump {}\n", val));
+            }
+            if let Some(val) = &host.forward_agent {
+                out.push_str(&format!("    ForwardAgent {}\n", val));
+            }
+            out.push('\n');
+        }
+        fs::write(path, out)
+    }
 }
 
 struct AppState {
@@ -114,7 +142,6 @@ fn ssh_config_path() -> PathBuf {
     let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(format!("{}\\.ssh\\config", home))
 }
-
 
 fn draw_ui(
     f: &mut ratatui::Frame,
@@ -225,6 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Save changes
                             if app.selected < app.hosts.len() {
                                 app.hosts[app.selected] = edit.host.clone();
+                                let _ = HostEntry::write_ssh_config(&app.hosts); // Save to file
                             }
                             app.edit_mode = None;
                         }
