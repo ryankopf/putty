@@ -258,6 +258,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initial draw before flushing events
     terminal.draw(|f| draw_ui(f, &app, &config_path_str))?;
 
+    // Give terminal time to settle
+    sleep(Duration::from_millis(100));
+
     // Flush any leftover events (e.g. Enter from cargo run)
     while event::poll(Duration::from_millis(0))? {
         let _ = event::read();
