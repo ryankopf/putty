@@ -210,7 +210,7 @@ fn draw_ui(
 
         f.render_widget(list, chunks[0]);
 
-        let edit = Paragraph::new("Press [e] to edit a host, [n] to add new host, [k] to secure keyfile, [q] to quit")
+        let edit = Paragraph::new("Press [e] to edit a host, [n] to add new host, [k] to secure keyfile, [Shift+Up/Down] move host, [q] to quit")
             .block(Block::default().borders(Borders::ALL).title("Controls"));
         f.render_widget(edit, chunks[1]);
 
@@ -428,18 +428,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        KeyCode::Down => {
-                            if !app.hosts.is_empty() {
-                                app.selected = (app.selected + 1) % app.hosts.len();
-                            }
-                        }
                         KeyCode::Up => {
-                            if !app.hosts.is_empty() {
+                            if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                                // Move host up
+                                if app.selected > 0 {
+                                    app.hosts.swap(app.selected, app.selected - 1);
+                                    app.selected -= 1;
+                                    let _ = HostEntry::write_ssh_config(&app.hosts);
+                                }
+                            } else if !app.hosts.is_empty() {
                                 if app.selected == 0 {
                                     app.selected = app.hosts.len() - 1;
                                 } else {
                                     app.selected -= 1;
                                 }
+                            }
+                        }
+                        KeyCode::Down => {
+                            if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                                // Move host down
+                                if app.selected + 1 < app.hosts.len() {
+                                    app.hosts.swap(app.selected, app.selected + 1);
+                                    app.selected += 1;
+                                    let _ = HostEntry::write_ssh_config(&app.hosts);
+                                }
+                            } else if !app.hosts.is_empty() {
+                                app.selected = (app.selected + 1) % app.hosts.len();
                             }
                         }
                         _ => {}
