@@ -210,7 +210,7 @@ fn draw_ui(
 
         f.render_widget(list, chunks[0]);
 
-        let edit = Paragraph::new("Press [e] to edit a host, [k] to secure keyfile, [q] to quit")
+        let edit = Paragraph::new("Press [e] to edit a host, [n] to add new host, [k] to secure keyfile, [q] to quit")
             .block(Block::default().borders(Borders::ALL).title("Controls"));
         f.render_widget(edit, chunks[1]);
 
@@ -287,6 +287,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if app.selected < app.hosts.len() {
                                 app.hosts[app.selected] = edit.host.clone();
                                 let _ = HostEntry::write_ssh_config(&app.hosts); // Save to file
+                            } else {
+                                // Adding new host
+                                app.hosts.push(edit.host.clone());
+                                app.selected = app.hosts.len() - 1;
+                                let _ = HostEntry::write_ssh_config(&app.hosts);
                             }
                             app.edit_mode = None;
                         }
@@ -346,6 +351,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     field_values: vec![], // unused for now
                                 });
                             }
+                        }
+                        KeyCode::Char('n') => {
+                            // Add new host
+                            let new_host = HostEntry {
+                                name: String::from("new-host"),
+                                hostname: None,
+                                user: None,
+                                port: None,
+                                identity_file: None,
+                                password: None,
+                            };
+                            app.edit_mode = Some(EditState {
+                                host: new_host,
+                                field_index: 0,
+                                field_values: vec![],
+                            });
                         }
                         KeyCode::Char('k') => {
                             if !app.hosts.is_empty() {
