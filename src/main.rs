@@ -272,7 +272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Event::Key(key) = event::read()? {
             let now = std::time::Instant::now();
             let allow = match (app.last_key, app.last_key_time) {
-                (Some(prev), Some(t)) if prev == key.code && now.duration_since(t) < Duration::from_millis(200) => false,
+                (Some(prev), Some(t)) if prev == key.code && now.duration_since(t) < Duration::from_millis(50) => false,
                 _ => true,
             };
             if allow {
